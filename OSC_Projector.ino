@@ -14,12 +14,12 @@
 #include <ESP8266mDNS.h>
 #include <ArduinoOTA.h>
 
-//Default custom static IP
+//default custom static IP
 char static_ip[16] = "192.168.1.78";
 char static_gw[16] = "192.168.1.1";
 char static_sn[16] = "255.255.255.0";
 
-//Flag for saving data
+//flag for saving data
 bool shouldSaveConfig = false;
 
 //OSC setup
@@ -28,15 +28,17 @@ IPAddress qLabIP(192,168,1,200); //qLab IP
 unsigned int qLabPort = 53000; //qLab port
 unsigned int localPort = 8888; // OSC port
 OSCErrorCode error;
-byte lock = 0; //Only execute 1 OSC comand at a time
+byte lock = 0; // only execute 1 OSC comand at a time
 
-//Pojector serial comunication setup
-SoftwareSerial projSerial(14, 12, false, 256); 
+//projector setup
+SoftwareSerial projSerial(14, 12, false, 256); //setup projector connection
 
-//Webserver setup
+//webserver setup
 ESP8266WebServer server(80);
 
-//Homepage
+//Local intialization. Once its business is done, there is no need to keep it around
+WiFiManager wifiManager;
+
 char INDEX_HTML[640] =
 "<!DOCTYPE HTML>"
 "<html>"
@@ -58,31 +60,25 @@ char INDEX_HTML[640] =
 "</html>";
 
 
-//Callback notifying us of the need to save config
+//callback notifying us of the need to save config
 void saveConfigCallback () {
   Serial.println("Should save config");
   shouldSaveConfig = true;
 }
 
-//Show index html file
 void displayIndex(){
-  //Break up QLab IP for display
    byte oct1 = qLabIP[0];
    byte oct2 = qLabIP[1];
    byte oct3 = qLabIP[2];
    byte oct4 = qLabIP[3];
 
-   //Insert QLab IP into index html
    char s[16];  
    sprintf(s, "%d.%d.%d.%d", oct1, oct2, oct3, oct4);
    char html[640];
    sprintf(html, INDEX_HTML, s, qLabPort);
-
-   //Display index
    server.send(200, "text/html", html);
 }
 
-//Handle navigation to index page
 void handleRoot(){
   if (server.hasArg("qLabPort")) {
     handleSubmit();
@@ -91,30 +87,21 @@ void handleRoot(){
   }
 }
 
-//Handle submision from index page
 void handleSubmit(){
   if (!server.hasArg("qLabPort")) return returnFail("BAD ARGS");
-
-  //Get new values from index page
   qLabPort = server.arg("qLabPort").toInt();
   String ipTemp = server.arg("qLabIP");
   qLabIP.fromString(ipTemp);
-
-  //Save new values to memory
   updateConfig();
-
-  //Restart ESP
   ESP.reset();
 }
 
-//Handle webpage errors
 void returnFail(String msg){
   server.sendHeader("Connection", "close");
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.send(500, "text/plain", msg + "\r\n");
 }
 
-//Handle 404 error
 void handleNotFound(){
   String message = "File Not Found\n\n";
   message += "URI: ";
@@ -130,15 +117,11 @@ void handleNotFound(){
   server.send(404, "text/plain", message);
 }
 
-//Saves volitile values to memory such as my ip my gateway my 
 void updateConfig(){
     Serial.println("saving config");
-
-    //Create object for settings
     DynamicJsonBuffer jsonBuffer;
     JsonObject& json = jsonBuffer.createObject();
 
-    //Populate object with values
     json["ip"] = WiFi.localIP().toString();
     json["gateway"] = WiFi.gatewayIP().toString();
     json["subnet"] = WiFi.subnetMask().toString();
@@ -153,22 +136,18 @@ void updateConfig(){
     sprintf(s, "%d.%d.%d.%d", oct1, oct2, oct3, oct4);     
     json["qlabip"] = String(s);
 
-    //Create file in memory
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
       Serial.println("failed to open config file for writing");
     }
 
-    //Copy object to memory
     json.prettyPrintTo(Serial);
     json.printTo(configFile);
     configFile.close();
+    //end save
 }
 
-
-//Begin ESP setup
 void setup() {
-  //Start projector and local serial
   Serial.begin(115200);  
   projSerial.begin(9600);
   Serial.println();
@@ -177,13 +156,13 @@ void setup() {
   //clean FS, for testing
   //SPIFFS.format();
 
-  //Begin read configuration from FS json
+  //read configuration from FS json
   Serial.println("mounting FS...");
 
   if (SPIFFS.begin()) {
     Serial.println("mounted file system");
     if (SPIFFS.exists("/config.json")) {
-      //File exists, reading and loading
+      //file exists, reading and loading
       Serial.println("reading config file");
       File configFile = SPIFFS.open("/config.json", "r");
       if (configFile) {
@@ -198,7 +177,6 @@ void setup() {
         if (json.success()) {
           Serial.println("\nparsed json");
           if(json["ip"]) {
-            //Get memory values
             char tmp_port[5];
             char tmp_ip[19];
             Serial.println("setting custom ip from config");
@@ -220,10 +198,9 @@ void setup() {
   } else {
     Serial.println("failed to mount FS");
   }
-  //End read
+  //end read
   
-  //Local intialization
-  WiFiManager wifiManager;
+
 
   //set config save notify callback
   wifiManager.setSaveConfigCallback(saveConfigCallback);
@@ -231,7 +208,7 @@ void setup() {
   //reset settings - for testing
   //wifiManager.resetSettings();
 
-  //set static IP gateway and subnet 
+  //set static ip 
   IPAddress _ip,_gw,_sn;
   _ip.fromString(static_ip);
   _gw.fromString(static_gw);
@@ -240,9 +217,10 @@ void setup() {
   wifiManager.setSTAStaticIPConfig(_ip, _gw, _sn);
 
 
-  //Tries to connect to last known settings if not start an access point with
-  //SSID  "OSC_Projector_Setup" and password "projector"
-  //holds here until it gets pertnet information
+  //tries to connect to last known settings
+  //if it does not connect it starts an access point with the specified name
+  //here  "OSC_Projector_Setup" with password "projector"
+  //and goes into a blocking loop awaiting configuration
   if (!wifiManager.autoConnect("OSC_Projector_Setup", "projector76")) {
     Serial.println("failed to connect, we should reset as see if it connects");
     delay(3000);
@@ -250,14 +228,14 @@ void setup() {
     delay(5000);
   }
 
+  //if you get here you have connected to the WiFi
   Serial.println("connected...yeey :)");
 
-  //Save the custom parameters to FS
+  //save the custom parameters to FS
   if (shouldSaveConfig) {
     updateConfig();
   }
 
-  //Start UDP for OSC comunication
   Serial.println("Starting UDP");
   Udp.begin(localPort);
   Serial.print("Local port: ");
@@ -268,9 +246,11 @@ void setup() {
   Serial.println(WiFi.gatewayIP());
   Serial.println(WiFi.subnetMask());
 
-  //OTA information
-  ArduinoOTA.setHostname("projectorOSC"); //Hostname
-  ArduinoOTA.setPassword((const char *)"projector23"); //Password
+  // Hostname defaults to esp8266-[ChipID]
+  ArduinoOTA.setHostname("projectorOSC");
+
+  // No authentication by default
+   ArduinoOTA.setPassword((const char *)"projector23");
 
   ArduinoOTA.onStart([]() {
     Serial.println("Start");
@@ -291,41 +271,9 @@ void setup() {
   });
   ArduinoOTA.begin();
 
-  //Begin serving web pages
   server.on("/", handleRoot);  
   server.onNotFound(handleNotFound);
   server.begin();
-  
-}
-
-/* Power the projector
- *  0 -- turns off the projector
- *  1 -- turn on the projector
- *  2 -- power status
- */
-void power(OSCMessage &msg){
-  OSCMessage qLab_msg("/cue/p0/name");
-  Serial.print("Power");
-  lock = 1;
-  
-  if(msg.getInt(0) == 1){
-    projSerial.write("PWR ON\r");
-    Serial.println(" On");
-    qLab_msg.add("Power On");
-  }else if(msg.getInt(0) == 2){
-    projSerial.write("PWR?\r");
-    Serial.println(" Status");
-    qLab_msg.add("Power Status");    
-  }else{
-    projSerial.write("PWR OFF\r");
-    Serial.println(" Off");
-    qLab_msg.add("Power Off");
-  }
-
-  Udp.beginPacket(qLabIP, qLabPort);
-  qLab_msg.send(Udp);
-  Udp.endPacket();
-  qLab_msg.empty();
   
 }
 
@@ -428,32 +376,21 @@ void zoom_inc(OSCMessage &msg){
   OSCMessage qLab_msg("/cue/p0/name");
   Serial.print("Zoom ");
   lock = 1;
-  char cmd[8] = "KEY 38\r";
-//  char cmd[10] = "ZOOM INC\r";
-//  
+  char cmd[10] = "ZOOM MAX\r";
+  
   if(msg.getInt(0) < 0){
-//    cmd[5] = 'D';
-//    cmd[6] = 'E';
-
-      cmd[4] = '3';
-      cmd[5] = '7';
+    cmd[6] = 'I';
+    cmd[7] = 'N';
   }
 
-  projSerial.write("KEY 2F\r");
-  int high = (abs(msg.getInt(0)) > 200)? 200 : abs(msg.getInt(0));
-  
-  Serial.print(cmd);
-  Serial.print(" ");
-  Serial.print(high);
-  Serial.println(" times");
-  
-  for(int i = 0; i < high; i++){
-    projSerial.write(cmd);
-    delay(200);
-  }
+  int high = (abs(msg.getInt(0)) > 9000)? 9000 : abs(msg.getInt(0));
 
-  projSerial.write("KEY 3D\r");
-  qLab_msg.add("Zoom Incremental");    
+  projSerial.write(cmd);  
+  delay(high);
+  projSerial.write("ZOOM OFF\r");
+    
+
+  qLab_msg.add("Zoom Incremental 2.0");    
   Udp.beginPacket(qLabIP, qLabPort);
   qLab_msg.send(Udp);
   Udp.endPacket();
@@ -498,24 +435,18 @@ void focus_inc(OSCMessage &msg){
   OSCMessage qLab_msg("/cue/p0/name");
   Serial.print("Focus ");
   lock = 1;
-  char cmd[11] = "FOCUS INC\r";
+  char cmd[11] = "FOCUS MAX\r";
   
   if(msg.getInt(0) < 0){
-    cmd[6] = 'D';
-    cmd[7] = 'E';
+    cmd[7] = 'I';
+    cmd[8] = 'N';
   }
 
-  int high = (abs(msg.getInt(0)) > 50)? 50 : abs(msg.getInt(0));
+  int high = (abs(msg.getInt(0)) > 9000)? 9000 : abs(msg.getInt(0));
   
-  Serial.print(cmd);
-  Serial.print(" ");
-  Serial.print(high);
-  Serial.println(" times");
-  
-  for(int i = 0; i < high; i++){
-    projSerial.write(cmd);
-    delay(500);
-  }
+  projSerial.write(cmd);
+  delay(high);
+  projSerial.write("FOCUS OFF\r");
   
   qLab_msg.add("Focus Incremental");    
   Udp.beginPacket(qLabIP, qLabPort);
@@ -563,24 +494,20 @@ void lens_inc(OSCMessage &msg){
   OSCMessage qLab_msg("/cue/p0/name");
   Serial.print("Lens ");
   lock = 1;
-  char cmd[10] = "LENS INC\r";
+  char cmd[10] = "LENS MAX\r";
   
   if(msg.getInt(0) < 0){
-    cmd[5] = 'D';
-    cmd[6] = 'E';
+    cmd[6] = 'I';
+    cmd[7] = 'N';
   }
 
-  int high = (abs(msg.getInt(0)) > 50)? 50 : abs(msg.getInt(0));
+  int high = (abs(msg.getInt(0)) > 9000)? 9000 : abs(msg.getInt(0));
   
-  Serial.print(cmd);
-  Serial.print(" ");
-  Serial.print(high);
-  Serial.println(" times");
+
+  projSerial.write(cmd);
+  delay(high);
+  projSerial.write("LENS OFF\r");
   
-  for(int i = 0; i < high; i++){
-    projSerial.write(cmd);
-    delay(500);
-  }
   
   qLab_msg.add("Vertical Lens Incremental");    
   Udp.beginPacket(qLabIP, qLabPort);
@@ -628,24 +555,18 @@ void hlens_inc(OSCMessage &msg){
   OSCMessage qLab_msg("/cue/p0/name");
   Serial.print("HLens ");
   lock = 1;
-  char cmd[11] = "HLENS INC\r";
+  char cmd[11] = "HLENS MAX\r";
   
   if(msg.getInt(0) < 0){
-    cmd[6] = 'D';
-    cmd[7] = 'E';
+    cmd[7] = 'I';
+    cmd[8] = 'N';
   }
 
-  int high = (abs(msg.getInt(0)) > 50)? 50 : abs(msg.getInt(0));
-  
-  Serial.print(cmd);
-  Serial.print(" ");
-  Serial.print(high);
-  Serial.println(" times");
-  
-  for(int i = 0; i < high; i++){
-    projSerial.write(cmd);
-    delay(500);
-  }
+  int high = (abs(msg.getInt(0)) > 9000)? 9000 : abs(msg.getInt(0));
+
+  projSerial.write(cmd);
+  delay(high);
+  projSerial.write("HLENS OFF\r");
   
   qLab_msg.add("Horizontal Lens Incremental");    
   Udp.beginPacket(qLabIP, qLabPort);
@@ -679,7 +600,7 @@ void vpos_inc(OSCMessage &msg){
   
   for(int i = 0; i < high; i++){
     projSerial.write(cmd);
-    delay(500);
+    delay(100);
   }
   
   qLab_msg.add("Vertical Postition Incremental");    
@@ -714,7 +635,7 @@ void hpos_inc(OSCMessage &msg){
   
   for(int i = 0; i < high; i++){
     projSerial.write(cmd);
-    delay(500);
+    delay(100);
   }
   
   qLab_msg.add("Horizontal Position Incremental");    
@@ -725,50 +646,73 @@ void hpos_inc(OSCMessage &msg){
 
 }
 
-//Begin main program loop
+/* Power the projector
+ *  0 -- power off the projector
+ *  1 -- power on the projector
+ *  2 -- power status
+ */
+void power(OSCMessage &msg){
+  OSCMessage qLab_msg("/cue/p0/name");
+  Serial.print("Power");
+  lock = 1;
+  
+  if(msg.getInt(0) == 1){
+    projSerial.write("PWR ON\r");
+    Serial.println(" On");
+    qLab_msg.add("Power On");
+  }else if(msg.getInt(0) == 2){
+    projSerial.write("PWR?\r");
+    Serial.println(" Status");
+    qLab_msg.add("Power Status");    
+  }else{
+    projSerial.write("PWR OFF\r");
+    Serial.println(" Off");
+    qLab_msg.add("Power Off");
+  }
+
+  Udp.beginPacket(qLabIP, qLabPort);
+  qLab_msg.send(Udp);
+  Udp.endPacket();
+  qLab_msg.empty();
+  
+}
+
+
+/* Reset the wifi
+ *  reset code is 871249
+ */
+void wifiReset(OSCMessage &msg){  
+  if(msg.getInt(0) == 871249){
+    Serial.println("Wifi Reseting");
+    wifiManager.resetSettings();
+    ESP.restart();
+  }
+}
+
+/* Restart the esp
+ *  reset code is 125771
+ */
+void restart(OSCMessage &msg){
+  if(msg.getInt(0) == 125771){
+    ESP.restart();
+  }
+}
 void loop() {
-  ArduinoOTA.handle(); //OTA updates
-  server.handleClient(); //Handle web requests
+  ArduinoOTA.handle();
+  server.handleClient();
   digitalWrite(LED_BUILTIN, HIGH);
-  
-  String readString; //Create response string
-  while (projSerial.available() > 0) { //look for projector response
-    Serial.write(projSerial.read());
-    delay(3);  
-    char c = projSerial.read();
-    readString += c; 
-  }
-  readString.trim(); //clean projector response
 
-  //TODO:: Fix OSC lock 
   lock = 0;
-  
-//  if(readString == ":"){
-//    Serial.println("unlock");
-//    lock = 0; //clear osc lock
-//  }else 
 
-  //TODO:: Fix retungin projector statuses
-  if(readString != ""){    
-    OSCMessage qLab_msg("/cue/p1/name");
-    const char* foo = readString.c_str();
-    qLab_msg.add(foo);    
-    Udp.beginPacket(qLabIP, qLabPort);
-    qLab_msg.send(Udp);
-    Udp.endPacket();
-    qLab_msg.empty();
-  }
+  OSCMessage msg; //create an osc message
+  int size = Udp.parsePacket(); //get the size of packet
 
-  OSCMessage msg; //Create an osc message
-  int size = Udp.parsePacket(); //Get the size of packet
-
-  if (size > 0 && !lock) { //If the packet has a size and OSC isn't locked
+  if (size > 0 && !lock) { //if the packet has a size and OSC isn't locked
     while (size--) {
-      msg.fill(Udp.read()); //Populate the message
+      msg.fill(Udp.read()); //populate the message
     }
     if (!msg.hasError()) {
-      //Send the correct comand to the projector
-      msg.dispatch("/projector/power", power);
+      //send the correct comand to the projector
       msg.dispatch("/projector/freeze", freeze);
       msg.dispatch("/projector/shutter", shutter);
       msg.dispatch("/projector/zoom", zoom);
@@ -781,6 +725,9 @@ void loop() {
       msg.dispatch("/projector/h-lens/increment", hlens_inc);
       msg.dispatch("/projector/h-pos/increment", hpos_inc);
       msg.dispatch("/projector/v-pos/increment", vpos_inc);
+      msg.dispatch("/projector/power", power);
+      msg.dispatch("/projector/reset_wifi", wifiReset);
+      msg.dispatch("/projector/restart", restart);
     } else {
       error = msg.getError();
       Serial.print("error: ");
